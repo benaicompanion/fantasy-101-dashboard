@@ -20,6 +20,9 @@ function initManagerStats(userId: string): ManagerStats {
     championships: 0,
     secondPlace: 0,
     thirdPlace: 0,
+    lastPlace: 0,
+    secondToLast: 0,
+    thirdToLast: 0,
     luckyWins: 0,
     unluckyLosses: 0,
     seasonsPlayed: 0,
@@ -190,6 +193,31 @@ export function aggregateAllSeasons(seasons: SeasonData[]): AggregatedData {
         // 3rd place game
         if (winnerOwner && stats[winnerOwner]) stats[winnerOwner].thirdPlace++;
       }
+    }
+
+    // Calculate regular season standings for bottom 3 finishes
+    const rostersWithOwners = rosters
+      .filter((r) => r.owner_id && stats[r.owner_id])
+      .map((r) => ({
+        ownerId: r.owner_id,
+        wins: r.settings.wins || 0,
+        losses: r.settings.losses || 0,
+        ptsFor: (r.settings.fpts || 0) + (r.settings.fpts_decimal || 0) / 100,
+      }));
+
+    // Sort ascending: worst record first (fewest wins, then lowest PF as tiebreaker)
+    rostersWithOwners.sort((a, b) => {
+      if (a.wins !== b.wins) return a.wins - b.wins;
+      return a.ptsFor - b.ptsFor;
+    });
+
+    if (rostersWithOwners.length >= 3) {
+      const last = rostersWithOwners[0].ownerId;
+      const secondToLast = rostersWithOwners[1].ownerId;
+      const thirdToLast = rostersWithOwners[2].ownerId;
+      if (stats[last]) stats[last].lastPlace++;
+      if (stats[secondToLast]) stats[secondToLast].secondToLast++;
+      if (stats[thirdToLast]) stats[thirdToLast].thirdToLast++;
     }
   }
 

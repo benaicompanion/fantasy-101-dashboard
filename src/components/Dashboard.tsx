@@ -7,6 +7,7 @@ import TrophyCase from "./TrophyCase";
 import BestWorstTeams from "./BestWorstTeams";
 import HeadToHeadMatrix from "./HeadToHeadMatrix";
 import LuckTracker from "./LuckTracker";
+import BottomFinishes from "./BottomFinishes";
 
 interface Props {
   allData: AggregatedData;
@@ -64,6 +65,7 @@ export default function Dashboard({ allData, sleeperOnlyData }: Props) {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-12">
         <AllTimeLeaderboard managers={data.managers} stats={data.stats} />
         <TrophyCase managers={data.managers} stats={data.stats} />
+        <BottomFinishes managers={data.managers} stats={data.stats} />
         <BestWorstTeams
           bestTeams={data.bestTeams}
           worstTeams={data.worstTeams}

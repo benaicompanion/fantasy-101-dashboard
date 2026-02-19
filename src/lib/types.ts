@@ -82,6 +82,9 @@ export interface ManagerStats {
   championships: number;
   secondPlace: number;
   thirdPlace: number;
+  lastPlace: number;
+  secondToLast: number;
+  thirdToLast: number;
   luckyWins: number;
   unluckyLosses: number;
   seasonsPlayed: number;
