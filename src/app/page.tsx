@@ -1,4 +1,5 @@
 import { getAllSeasonsData } from "@/lib/sleeper";
+import { getYahooSeasonsData } from "@/lib/yahoo";
 import { aggregateAllSeasons } from "@/lib/aggregate";
 import AllTimeLeaderboard from "@/components/AllTimeLeaderboard";
 import TrophyCase from "@/components/TrophyCase";
@@ -11,8 +12,15 @@ const LEAGUE_ID = "1257436698095136768";
 export const revalidate = 604800; // Revalidate weekly
 
 export default async function Home() {
-  const seasons = await getAllSeasonsData(LEAGUE_ID);
-  const data = aggregateAllSeasons(seasons);
+  const sleeperSeasons = await getAllSeasonsData(LEAGUE_ID);
+  const yahooSeasons = getYahooSeasonsData();
+
+  // Combine Yahoo (2006-2019) + Sleeper (2020-2025), sorted by season
+  const allSeasons = [...yahooSeasons, ...sleeperSeasons].sort(
+    (a, b) => parseInt(a.league.season) - parseInt(b.league.season)
+  );
+
+  const data = aggregateAllSeasons(allSeasons);
 
   const totalGames = Object.values(data.stats).reduce(
     (sum, s) => sum + s.totalWins + s.totalLosses,
@@ -35,7 +43,7 @@ export default async function Home() {
               {totalGames / 2} matchups
             </p>
           </div>
-          <div className="text-xs text-gray-600">Powered by Sleeper</div>
+          <div className="text-xs text-gray-600">Powered by Sleeper + Yahoo</div>
         </div>
       </header>
 
@@ -64,6 +72,15 @@ export default async function Home() {
           rel="noopener noreferrer"
         >
           Sleeper
+        </a>
+        {" & "}
+        <a
+          href="https://football.fantasysports.yahoo.com"
+          className="text-gray-400 hover:text-white transition-colors"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Yahoo
         </a>
       </footer>
     </main>
