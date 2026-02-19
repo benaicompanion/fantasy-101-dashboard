@@ -325,8 +325,12 @@ class YahooFantasyClient:
             rosters = []
             roster_to_owner = {}
 
-            for idx, team in enumerate(teams):
-                team_id = idx + 1  # 1-based roster_id equivalent
+            # Sort teams by rank so roster_id 1 = rank 1 (champion), etc.
+            # This makes championship determination stable and correct.
+            teams_sorted = sorted(teams, key=lambda t: int(t.get("rank") or 99))
+
+            for idx, team in enumerate(teams_sorted):
+                team_id = idx + 1  # 1-based roster_id; rank 1 team gets roster_id 1
                 manager_id = team.get("manager_guid", f"yahoo_{team.get('team_key', idx)}")
 
                 users.append({
@@ -357,7 +361,7 @@ class YahooFantasyClient:
 
             # Build team_key -> roster_id mapping for matchup parsing
             team_key_to_roster_id = {}
-            for idx, team in enumerate(teams):
+            for idx, team in enumerate(teams_sorted):
                 team_key_to_roster_id[team.get("team_key", "")] = idx + 1
 
             # Fetch weekly matchups
@@ -373,22 +377,10 @@ class YahooFantasyClient:
                     print(f"  Warning: Could not fetch week {week}: {e}")
                     all_matchups.append([])
 
-            # Fetch playoff matchups to determine placements
-            print(f"  Fetching playoff weeks {playoff_start}-{end_week}...")
-            playoff_matchups = []
-            for week in range(playoff_start, end_week + 1):
-                try:
-                    scoreboard = self.get_league_scoreboard(league_key, week)
-                    week_matchups = self._parse_scoreboard(scoreboard, team_key_to_roster_id)
-                    playoff_matchups.append((week, week_matchups))
-                    time.sleep(0.2)
-                except Exception as e:
-                    print(f"  Warning: Could not fetch playoff week {week}: {e}")
-
-            # Determine placements from playoff matchups
-            winners_bracket = self._determine_placements(
-                playoff_matchups, playoff_start, end_week, team_key_to_roster_id
-            )
+            # Build winners bracket directly from standings rank.
+            # rank=1 → champion, rank=2 → runner-up, rank=3 → 3rd place.
+            # This is authoritative and does not depend on playoff matchup parsing.
+            winners_bracket = self._build_bracket_from_rankings(roster_to_owner)
 
             # Build SeasonData-compatible output
             season_data = {
@@ -612,6 +604,34 @@ class YahooFantasyClient:
 
         return matchups
 
+    def _build_bracket_from_rankings(self, roster_to_owner: dict) -> list[dict]:
+        """Build winners bracket from standings rankings.
+
+        Since we sort teams by rank and assign roster_id 1=rank1, 2=rank2, etc.,
+        the roster IDs directly encode final standings. This is stable and accurate.
+        """
+        bracket = []
+
+        # Championship game: roster 1 (champion) beat roster 2 (runner-up)
+        if 1 in roster_to_owner and 2 in roster_to_owner:
+            bracket.append({
+                "r": 2, "m": 1,
+                "t1": 1, "t2": 2,
+                "w": 1, "l": 2,
+                "p": 1,
+            })
+
+        # 3rd place game: roster 3 beat roster 4
+        if 3 in roster_to_owner and 4 in roster_to_owner:
+            bracket.append({
+                "r": 2, "m": 2,
+                "t1": 3, "t2": 4,
+                "w": 3, "l": 4,
+                "p": 3,
+            })
+
+        return bracket
+
     def _determine_placements(
         self,
         playoff_matchups: list[tuple[int, list[dict]]],
@@ -619,15 +639,15 @@ class YahooFantasyClient:
         end_week: int,
         team_key_to_roster_id: dict,
     ) -> list[dict]:
-        """Determine 1st/2nd/3rd from playoff matchups."""
+        """Determine 1st/2nd/3rd from playoff matchups.
+
+        Uses semifinal results to identify which final-week matchup is the
+        championship (semifinal winners) vs 3rd place (semifinal losers).
+        """
         bracket = []
 
         if not playoff_matchups:
             return bracket
-
-        # The championship is typically the last playoff week
-        # The matchup with the two highest-seeded teams in the final week = championship
-        # We'll use a simpler heuristic: in the final week, the first matchup is championship
 
         final_week_matchups = None
         semifinal_week_matchups = None
@@ -638,41 +658,75 @@ class YahooFantasyClient:
             elif week == end_week - 1:
                 semifinal_week_matchups = matchups
 
-        if final_week_matchups:
-            # Group by matchup_id
-            by_matchup = {}
-            for m in final_week_matchups:
+        if not final_week_matchups:
+            return bracket
+
+        # Identify semifinal winners (they play in the championship)
+        semi_winners = set()
+        semi_losers = set()
+        if semifinal_week_matchups:
+            semi_by_matchup = {}
+            for m in semifinal_week_matchups:
                 mid = m["matchup_id"]
-                if mid not in by_matchup:
-                    by_matchup[mid] = []
-                by_matchup[mid].append(m)
+                if mid not in semi_by_matchup:
+                    semi_by_matchup[mid] = []
+                semi_by_matchup[mid].append(m)
 
+            for mid, pair in semi_by_matchup.items():
+                if len(pair) == 2:
+                    winner = max(pair, key=lambda x: x["points"])
+                    loser = min(pair, key=lambda x: x["points"])
+                    semi_winners.add(winner["roster_id"])
+                    semi_losers.add(loser["roster_id"])
+
+        # Group final week by matchup_id
+        by_matchup = {}
+        for m in final_week_matchups:
+            mid = m["matchup_id"]
+            if mid not in by_matchup:
+                by_matchup[mid] = []
+            by_matchup[mid].append(m)
+
+        champ_matchup = None
+        third_matchup = None
+
+        if semi_winners:
+            # Use semifinal results to identify championship vs 3rd place
+            for mid, pair in by_matchup.items():
+                if len(pair) != 2:
+                    continue
+                roster_ids = {p["roster_id"] for p in pair}
+                if roster_ids.issubset(semi_winners):
+                    champ_matchup = pair
+                elif roster_ids.issubset(semi_losers):
+                    third_matchup = pair
+        else:
+            # No semifinal data — fall back to matchup_id ordering
             matchup_ids = sorted(by_matchup.keys())
-
-            # First matchup = championship, second = 3rd place (if exists)
             if matchup_ids:
-                champ_pair = by_matchup[matchup_ids[0]]
-                if len(champ_pair) == 2:
-                    winner = max(champ_pair, key=lambda x: x["points"])
-                    loser = min(champ_pair, key=lambda x: x["points"])
-                    bracket.append({
-                        "r": 2, "m": 1,
-                        "t1": winner["roster_id"], "t2": loser["roster_id"],
-                        "w": winner["roster_id"], "l": loser["roster_id"],
-                        "p": 1,  # Championship
-                    })
-
+                champ_matchup = by_matchup[matchup_ids[0]]
             if len(matchup_ids) > 1:
-                third_pair = by_matchup[matchup_ids[1]]
-                if len(third_pair) == 2:
-                    winner = max(third_pair, key=lambda x: x["points"])
-                    loser = min(third_pair, key=lambda x: x["points"])
-                    bracket.append({
-                        "r": 2, "m": 2,
-                        "t1": winner["roster_id"], "t2": loser["roster_id"],
-                        "w": winner["roster_id"], "l": loser["roster_id"],
-                        "p": 3,  # 3rd place
-                    })
+                third_matchup = by_matchup[matchup_ids[1]]
+
+        if champ_matchup and len(champ_matchup) == 2:
+            winner = max(champ_matchup, key=lambda x: x["points"])
+            loser = min(champ_matchup, key=lambda x: x["points"])
+            bracket.append({
+                "r": 2, "m": 1,
+                "t1": winner["roster_id"], "t2": loser["roster_id"],
+                "w": winner["roster_id"], "l": loser["roster_id"],
+                "p": 1,
+            })
+
+        if third_matchup and len(third_matchup) == 2:
+            winner = max(third_matchup, key=lambda x: x["points"])
+            loser = min(third_matchup, key=lambda x: x["points"])
+            bracket.append({
+                "r": 2, "m": 2,
+                "t1": winner["roster_id"], "t2": loser["roster_id"],
+                "w": winner["roster_id"], "l": loser["roster_id"],
+                "p": 3,
+            })
 
         return bracket
 
