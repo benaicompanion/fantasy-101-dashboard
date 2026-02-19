@@ -6,6 +6,7 @@ const mapping = managerMapping as {
   yahooToSleeper: Record<string, string>;
   displayNameOverrides: Record<string, string>;
   teamNameToSleeper: Record<string, string>;
+  displayNameToSleeper: Record<string, string>;
 };
 
 /**
@@ -13,7 +14,7 @@ const mapping = managerMapping as {
  * where the same manager exists in both platforms.
  */
 export function getYahooSeasonsData(): SeasonData[] {
-  const { yahooToSleeper, displayNameOverrides, teamNameToSleeper } = mapping;
+  const { yahooToSleeper, displayNameOverrides, teamNameToSleeper, displayNameToSleeper } = mapping;
   const seasons = rawYahooData as SeasonData[];
 
   let anonCounter = 0;
@@ -28,6 +29,10 @@ export function getYahooSeasonsData(): SeasonData[] {
         // Anonymous/deleted account — check team name mapping first
         if (teamName && teamNameToSleeper[teamName]) {
           return teamNameToSleeper[teamName];
+        }
+        // Check display name mapping (e.g. "Bryan Linton" → Sleeper ID)
+        if (user.display_name && displayNameToSleeper[user.display_name]) {
+          return displayNameToSleeper[user.display_name];
         }
         return `yahoo_anon_${++anonCounter}`;
       }
@@ -69,11 +74,20 @@ export function getYahooSeasonsData(): SeasonData[] {
     };
 
     // Step 3: Remap users
-    const users = season.users.map((user, i) => ({
-      ...user,
-      user_id: newIdByUserIndex[i],
-      display_name: displayNameOverrides[user.user_id] ?? user.display_name,
-    }));
+    const seasonYear = season.league.season;
+    const users = season.users.map((user, i) => {
+      let displayName = displayNameOverrides[user.user_id] ?? user.display_name;
+      // Replace "--hidden--" with team name + year
+      if (displayName === "--hidden--") {
+        const teamName = user.metadata?.team_name || "Unknown";
+        displayName = `${teamName} (${seasonYear})`;
+      }
+      return {
+        ...user,
+        user_id: newIdByUserIndex[i],
+        display_name: displayName,
+      };
+    });
 
     // Step 4: Remap rosters
     const rosters = season.rosters.map((roster) => ({
